@@ -36,6 +36,40 @@ function drawLine(
   }
 }
 
+/**
+ * Largest font size (px) at which the ink of `lines` fits within `boxH` pixels,
+ * measured on the real glyphs (actualBoundingBoxAscent/Descent), capped at maxPx.
+ */
+function fitPx(
+  ctx: CanvasRenderingContext2D,
+  lines: string[],
+  weight: string,
+  stack: string,
+  boxH: number,
+  maxPx: number,
+): number {
+  const inkH = (p: number): number => {
+    ctx.font = weight + " " + p + "px " + stack;
+    let a = 0;
+    let d = 0;
+    for (const t of lines) {
+      const m = ctx.measureText(t || " ");
+      a = Math.max(a, m.actualBoundingBoxAscent);
+      d = Math.max(d, m.actualBoundingBoxDescent);
+    }
+    return a + d;
+  };
+  if (inkH(maxPx) <= boxH) return maxPx;
+  let lo = 6;
+  let hi = maxPx;
+  while (hi - lo > 0.25) {
+    const mid = (lo + hi) / 2;
+    if (inkH(mid) <= boxH) lo = mid;
+    else hi = mid;
+  }
+  return lo;
+}
+
 export function buildBitmap(s: LabelState): Bitmap {
   const H = HEAD_PX;
   if (s.mode === "barcode") return code128Bitmap(s.barcode || "", H);
@@ -48,7 +82,7 @@ export function buildBitmap(s: LabelState): Bitmap {
   }
 
   const sizeMap = s.twoLines ? { S: 10, M: 12, L: 14 } : { S: 17, M: 22, L: 26 };
-  const px = (sizeMap as Record<string, number>)[s.font] || 20;
+  let px = (sizeMap as Record<string, number>)[s.font] || 20;
   const ff = FONTS[s.fontFamily] || FONTS.condensed;
   const weight = s.bold
     ? s.fontFamily === "display"
@@ -57,9 +91,12 @@ export function buildBitmap(s: LabelState): Bitmap {
     : s.fontFamily === "display"
       ? "400"
       : "500";
-  const font = weight + " " + px + "px " + ff.stack;
-
   const measureCtx = document.createElement("canvas").getContext("2d")!;
+  // Size L on a single line (no underline): scale the text so its ink fills the
+  // full 30 px print head, like the DYMO app, and centre it on the ink box.
+  const fill = !s.twoLines && s.font === "L" && !s.underline;
+  if (fill) px = fitPx(measureCtx, L, weight, ff.stack, H, 40);
+  const font = weight + " " + px + "px " + ff.stack;
   measureCtx.font = font;
   let tw = 0;
   L.forEach((t) => {
@@ -83,6 +120,12 @@ export function buildBitmap(s: LabelState): Bitmap {
   if (s.twoLines) {
     drawLine(c, L[0], ax, H * 0.29, s, px);
     drawLine(c, L[1], ax, H * 0.71, s, px);
+  } else if (fill) {
+    c.textBaseline = "alphabetic";
+    const m = c.measureText(L[0] || " ");
+    const asc = m.actualBoundingBoxAscent;
+    const desc = m.actualBoundingBoxDescent;
+    drawLine(c, L[0], ax, (H - (asc + desc)) / 2 + asc, s, px);
   } else {
     drawLine(c, L[0], ax, H * 0.5, s, px);
   }
